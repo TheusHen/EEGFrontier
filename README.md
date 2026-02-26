@@ -11,6 +11,25 @@ This repository contains:
 
 Please check the `bom/` folder for the Bill of Materials and pricing information. A dedicated folder was created specifically to document BOM details and cost references.
 
+## Short Project Description
+
+**EEGFrontier V1** is an open-source EEG acquisition board designed to capture real brain signals and stream them in real time to a computer for analysis and visualization.
+It focuses on learning, experimentation, and understanding attention and focus using raw EEG data.
+
+---
+
+## How to Use the Project
+
+The board connects to EEG electrodes and streams data over USB to a computer.
+Users flash the firmware to the XIAO RP2040, connect electrodes to the header, and read real-time EEG data using serial tools or custom software written in any language.
+
+## Why I Made This Project
+
+I made EEGFrontier to learn how real EEG hardware works beyond black-box consumer devices.
+The goal is to make neurotechnology more accessible to students by providing a platform where raw signals, hardware design, and firmware are fully open and modifiable.
+
+---
+
 ## Project Concept
 
 The board is designed to connect dry electrodes and stream real-time data from the EEG channels.
