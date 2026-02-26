@@ -1,0 +1,4 @@
+*.kicad_prl
+*.kicad_pro
+*.lck
+EEGFrontier-backups/
