@@ -4979,10 +4979,10 @@
 			)
 		)
 		(pin "2"
-			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aad9")
+			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aada")
 		)
 		(pin "1"
-			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec58")
+			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec59")
 		)
 		(instances
 			(project ""
@@ -5251,10 +5251,10 @@
 			)
 		)
 		(pin "2"
-			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aad9")
+			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aadb")
 		)
 		(pin "1"
-			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec58")
+			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec5a")
 		)
 		(instances
 			(project ""
@@ -5493,7 +5493,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Horizontal"
 			(at 190.5 93.98 0)
 			(effects
 				(font
@@ -6286,10 +6286,10 @@
 			)
 		)
 		(pin "2"
-			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aad9")
+			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aadc")
 		)
 		(pin "1"
-			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec58")
+			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec5b")
 		)
 		(instances
 			(project ""
@@ -6694,10 +6694,10 @@
 			)
 		)
 		(pin "2"
-			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aad9")
+			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aadd")
 		)
 		(pin "1"
-			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec58")
+			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec5c")
 		)
 		(instances
 			(project ""
@@ -6763,10 +6763,10 @@
 			)
 		)
 		(pin "2"
-			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aad9")
+			(uuid "1d7adeee-d17e-41db-866a-ac64cc82aade")
 		)
 		(pin "1"
-			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec58")
+			(uuid "fdda8391-0605-497e-8a3a-91f9fb1aec5d")
 		)
 		(instances
 			(project ""
@@ -8413,10 +8413,10 @@
 			)
 		)
 		(pin "1"
-			(uuid "aaffe888-9ffe-496f-810c-3765164b9eac")
+			(uuid "aaffe888-9ffe-496f-810c-3765164b9ead")
 		)
 		(pin "2"
-			(uuid "4d650c6a-051a-4fd1-8391-0b0d98e342ef")
+			(uuid "4d650c6a-051a-4fd1-8391-0b0d98e342f0")
 		)
 		(instances
 			(project ""
