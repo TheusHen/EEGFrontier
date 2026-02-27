@@ -36,6 +36,9 @@ The board is designed to connect dry electrodes and stream real-time data from t
 
 ![EEGFrontier concept and wiring overview](assets/diagram.png)
 
+### Extented version(fixed header as PCB)
+![EEGFrontier concept and wiring overview V2](assets/new_diagram.png)
+
 ## Hardware Overview
 
 ### 3D View (Front)
