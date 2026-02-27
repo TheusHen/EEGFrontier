@@ -34,9 +34,6 @@ The goal is to make neurotechnology more accessible to students by providing a p
 
 The board is designed to connect dry electrodes and stream real-time data from the EEG channels.
 
-![EEGFrontier concept and wiring overview](assets/diagram.png)
-
-### Extented version(fixed header as PCB)
 ![EEGFrontier concept and wiring overview V2](assets/new_diagram.png)
 
 ## Hardware Overview
