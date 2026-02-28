@@ -1,0 +1,7 @@
+reflex>=0.5.0
+pyserial>=3.5
+numpy>=1.26
+scipy>=1.11
+pyqtgraph>=0.13.4
+PyQt6>=6.6
+mne>=1.6

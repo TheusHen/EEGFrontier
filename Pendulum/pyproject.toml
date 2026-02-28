@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pendulum-eeg"
+version = "0.1.0"
+description = "EEGFrontier host suite with Reflex + pyqtgraph frontends."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+  {name = "EEGFrontier Team"}
+]
+dependencies = [
+  "reflex>=0.5.0",
+  "pyserial>=3.5",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "pyqtgraph>=0.13.4",
+  "PyQt6>=6.6",
+  "mne>=1.6",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pendulum_eeg*", "pendulum_web*"]

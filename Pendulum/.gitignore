@@ -1,0 +1,11 @@
+*.py[cod]
+.web
+*.db
+assets/external/
+.states
+.venv/
+__pycache__/
+*.pyc
+.web/
+exports/
+*.egg-info/
