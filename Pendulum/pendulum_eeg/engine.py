@@ -11,7 +11,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from .analysis import BANDS, compute_band_metrics
+from .analysis import BANDS, SIGNAL_VIEW_ORDER, build_signal_views, compute_band_metrics
 from .firmware_protocol import (
     PROTO_VER,
     Packet,
@@ -204,10 +204,32 @@ class EEGEngine:
         with self._lock:
             history_tail = list(self._history)[-max_points:]
             base_index = history_tail[0].sample_index if history_tail else 0
-            plot_points = [
-                sample.as_plot_row((sample.sample_index - base_index) / float(self.config.sample_rate_hz))
-                for sample in history_tail
-            ]
+
+            if history_tail:
+                sample_rate = float(self.config.sample_rate_hz)
+                x_values = np.array(
+                    [
+                        (sample.sample_index - base_index) / sample_rate
+                        for sample in history_tail
+                    ],
+                    dtype=np.float64,
+                )
+                matrix_uv = np.array(
+                    [[s.ch1_uv, s.ch2_uv, s.ch3_uv, s.ch4_uv] for s in history_tail],
+                    dtype=np.float64,
+                )
+                signal_views = build_signal_views(matrix_uv, sample_rate_hz=sample_rate)
+            else:
+                x_values = np.array([], dtype=np.float64)
+                signal_views = {
+                    key: np.zeros((0, 4), dtype=np.float64) for key in SIGNAL_VIEW_ORDER
+                }
+
+            signal_plot_points = {
+                key: self._matrix_to_plot_rows(x_values, signal_views[key])
+                for key in SIGNAL_VIEW_ORDER
+            }
+            plot_points = signal_plot_points["raw"]
 
             latest_sample = self._latest_sample.as_export_row() if self._latest_sample else {}
             recent_events = list(self._events)[-event_limit:]
@@ -230,8 +252,24 @@ class EEGEngine:
                 "latest_sample": latest_sample,
                 "latest_metrics": dict(self._latest_metrics),
                 "plot_points": plot_points,
+                "signal_plot_points": signal_plot_points,
                 "events": recent_events,
             }
+
+    @staticmethod
+    def _matrix_to_plot_rows(x_values: np.ndarray, matrix_uv: np.ndarray) -> list[dict[str, float]]:
+        if matrix_uv.size == 0 or len(x_values) == 0:
+            return []
+        return [
+            {
+                "x": float(x_values[i]),
+                "ch1_uv": float(matrix_uv[i, 0]),
+                "ch2_uv": float(matrix_uv[i, 1]),
+                "ch3_uv": float(matrix_uv[i, 2]),
+                "ch4_uv": float(matrix_uv[i, 3]),
+            }
+            for i in range(min(len(x_values), matrix_uv.shape[0]))
+        ]
 
     def _push_event_line(self, message: str, level: str = "INFO") -> None:
         event = {
