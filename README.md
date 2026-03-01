@@ -54,6 +54,14 @@ The board is designed to connect dry electrodes and stream real-time data from t
 
 ![EEGFrontier V1 schematic](assets/sch.png)
 
+## Quick Start
+
+1. Flash the firmware to the Seeed XIAO RP2040 using PlatformIO
+2. Connect the EEGFrontier board via USB
+3. Attach EEG electrodes (channels, REF, BIAS)
+4. Open Pendulum or a serial monitor
+5. Start streaming with the `START` command
+
 ## Hardware Highlights
 
 - ADS1299-based 4-channel EEG analog front-end
@@ -107,12 +115,74 @@ pio device monitor -b 921600
 - `LOFF STATUS`
 - `PING`
 
+## Technical Specifications
+
+- Channels: 4 EEG channels + REF + BIAS
+- ADC: 24-bit (ADS1299)
+- Sampling rate: configurable (up to ADS1299 limits)
+- Interface: USB (CDC)
+- Power: USB 5V
+
 ## Repository Structure
 
 - `firmware/` - PlatformIO firmware for XIAO RP2040 + ADS1299
 - `assets/` - Images used in this README
 - `EEGFrontier.kicad_sch` / `EEGFrontier.kicad_pcb` - KiCad project files
+- `Pendulum` - Host software
 
-## Disclaimer
+## Pendulum
 
-This project is a hardware/firmware prototype for development and experimentation. It is not a certified medical device.
+**Pendulum** is the host software suite for EEGFrontier: it reads EEG data over USB, offers a local web dashboard (Reflex), and includes a desktop monitor for real-time focus visualization.
+
+For full setup and usage instructions, see `Pendulum/README.md`.
+
+![Pendulum desktop monitor](Pendulum/assets/monitor_simulate.png)
+
+![Pendulum web monitor](Pendulum/assets/web_simulate.png)
+
+![Pendulum result example](Pendulum/assets/alpha_example.png)
+
+![Pendulum interface detail](Pendulum/assets/PinLikeThat.png)
+
+## If you are considering building this
+
+I strongly recommend **not** attempting to fully hand-solder this PCB.
+
+The board uses fine-pitch components and sensitive analog circuitry, which makes manual soldering difficult and error-prone. Instead, consider ordering the PCB **fully assembled** from a service such as **JLCPCB**.
+
+If needed, you can then hand-solder only a few missing components — or none at all if everything is available for assembly.
+
+## Safety & Protection
+
+⚠️ **Important Safety Notice**
+
+This device interfaces electrically with the human body and must be used with caution.
+
+- This project **does not include medical-grade isolation** and **must never be connected to mains-powered equipment** without proper USB isolation.
+- Always operate the device using a **battery-powered computer** or a **USB isolator** specifically designed for biomedical signals.
+- Never use the device if any part of the circuit is damaged, exposed, or improperly assembled.
+- Ensure electrodes and cables are clean, dry, and in good condition before use.
+- Do **not** use this device on individuals with implanted electronic devices (e.g. pacemakers).
+- This project is intended **strictly for research, education, and experimentation**.
+
+The author assumes **no responsibility for misuse**, improper assembly, or unsafe operating conditions.
+
+By using or building this device, you acknowledge that you understand the risks involved in working with bioelectrical signals and accept full responsibility for its use.
+
+## Medical Disclaimer
+
+This project is **not a medical device** and is **not intended for diagnosis, treatment, or clinical use**.
+
+Any data produced by this device should be considered experimental and for educational or research purposes only.
+
+## Known Limitations
+
+- No medical-grade isolation
+- No onboard battery
+- Susceptible to motion artifacts with dry electrodes
+- Requires external software for filtering and analysis(Use Pendulum :)
+
+## License
+
+This project is released under the MIT License.
+See the `LICENSE` file for details.
