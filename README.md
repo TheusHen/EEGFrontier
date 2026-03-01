@@ -180,7 +180,7 @@ Any data produced by this device should be considered experimental and for educa
 - No medical-grade isolation
 - No onboard battery
 - Susceptible to motion artifacts with dry electrodes
-- Requires external software for filtering and analysis(Use Pendulum :)
+- Requires external software for filtering and analysis(e.g. Pendulum)
 
 ## License
 
