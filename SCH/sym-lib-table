@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "ADS1299IPAGR")(type "KiCad")(uri "E:/EEGFrontier/ADS1299IPAGR/ADS1299IPAGR.kicad_sym")(options "")(descr ""))
+)

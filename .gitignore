@@ -2,3 +2,11 @@
 *.kicad_pro
 *.lck
 EEGFrontier-backups/
+
+# Maintenance only files, check pcb/ and sch/ for production files
+EEGFrontier.kicad_pro
+EEGFrontier.kicad_pcb
+EEGFrontier.kicad_sch
+_autosave-EEGFrontier.kicad_pcb
+
+EEGFrontier.round-tracks-config
