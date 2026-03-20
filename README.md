@@ -30,12 +30,6 @@ Still pending on V2:
 
 ## Visual Comparison
 
-### Concept / Wiring
-
-| V1 | V2 |
-|---|---|
-| ![EEGFrontier concept and wiring overview V1](assets/old_diagram.png) | ![EEGFrontier concept and wiring overview V2](assets/new_diagram.png) |
-
 ### 3D View (Front)
 
 | V1 | V2 |
