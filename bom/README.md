@@ -1,4 +1,4 @@
-# BOM and Price Notes (EEGFrontier V1)
+# BOM and Price Notes (EEGFrontier V2)
 
 This folder contains the Bill of Materials references, price snapshots, and purchase/cart screenshots used for the **EEGFrontier V1** prototype.
 
@@ -20,7 +20,7 @@ This folder contains the Bill of Materials references, price snapshots, and purc
 | --- | --- | --- | --- | --- |
 | https://www.santoantoniodist.com.br/eletrodo3m/prod-9760997/ | Eletrodo 3M | 1x50 | R$ 37,90 + R$ 24,20 | USD $12,08 |
 | https://shop.neurospec.com/1-5mm-touchproof-female-to-open-lead-cable-5-pack | 1.5mm Touch-Proof (TP) Female to Open Lead Cable (5/pack) | 2x5 | R$ 413,81 + R$ 283,75 | USD $135,70 |
-| br.mouser.com | ADS1299-4PAGR | 1x1 | Included in Mouser cart | Mouser Cart: $79.85 |
+| br.mouser.com | ADS1299IPAGR | 1x1 | Included in Mouser cart | Mouser Cart: $86.00 |
 | www.digikey.com.br | Push Button | 1x1 | Included in DigiKey cart | DigiKey Cart: $46,83 |
 | br.mouser.com | Header 1x08 | 1x1 | Included in Mouser cart | Mouser Cart: $79.85 |
 | br.mouser.com | LEDs 0805 | 1x2 | Included in Mouser cart | Mouser Cart: $79.85 |
@@ -31,7 +31,7 @@ This folder contains the Bill of Materials references, price snapshots, and purc
 
 ### Estimated Total
 
-- **Total: $274,46** (as recorded in the original price sheet)
+- **Total: $280.61** (with ADS1299IPAGR)
 
 ## BOM / Placement Reference
 
@@ -58,6 +58,8 @@ This folder contains the Bill of Materials references, price snapshots, and purc
 ### Mouser Cart Summary
 
 ![Mouser cart summary screenshot](assets/Mouser_Cart.png)
+
+**changed for ADS1299IPAGR, more $6,15**
 
 ## Notes for Rebuilds
 
