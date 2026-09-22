@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    name: Host protocol tests + firmware sim
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install host test deps
+        run: pip install numpy scipy pyserial pytest
+
+      - name: Run Pendulum protocol tests
+        run: python -m pytest Pendulum/tests -q
+
+      - name: Run firmware sim check
+        run: python firmware/sim_v2_check.py
+
+  firmware-native:
+    name: Firmware unit tests (native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-native-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: pio-native-
+
+      - name: Run native unit tests
+        run: pio test -e native
+        working-directory: firmware
+
+  firmware-build:
+    name: Firmware build (XIAO RP2040)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-rp2040-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: pio-rp2040-
+
+      - name: Build firmware
+        run: pio run -e xiao_rp2040
+        working-directory: firmware

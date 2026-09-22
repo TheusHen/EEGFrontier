@@ -1,5 +1,6 @@
 #include "fw_commands.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "ads1299_driver.h"
@@ -35,14 +36,26 @@ void printJitterSummary() {
 }
 
 void printLeadOffStatusLine() {
-  Serial.print("# LOFF status24=0x");
-  Serial.print(g_lastStatus24, HEX);
-  Serial.print(" p=0x");
-  Serial.print(g_lastLeadOffStatP, HEX);
-  Serial.print(" n=0x");
-  Serial.print(g_lastLeadOffStatN, HEX);
-  Serial.print(" header_ok=");
-  Serial.println(((g_lastStatus24 & ADS_STATUS_HEADER_MASK) == ADS_STATUS_HEADER_OK) ? 1 : 0);
+  char buf[96];
+  snprintf(buf, sizeof(buf), "# LOFF status24=0x%06lX p=0x%02X n=0x%02X header_ok=%d",
+           static_cast<unsigned long>(g_lastStatus24), g_lastLeadOffStatP,
+           g_lastLeadOffStatN,
+           ((g_lastStatus24 & ADS_STATUS_HEADER_MASK) == ADS_STATUS_HEADER_OK) ? 1 : 0);
+  printLine(buf);
+}
+
+bool busyGuard(const char* what) {
+  if (!g_streaming) {
+    return false;
+  }
+  if (g_outputMode == MODE_BIN) {
+    emitErrorPacket(ERR_BUSY, 0, 0);
+  } else {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "# ERR BUSY %s STOP first", what ? what : "");
+    printLine(buf);
+  }
+  return true;
 }
 
 }  // namespace
@@ -58,17 +71,45 @@ bool capturePendingDrdySnapshot(DrdyFrameSnapshot* out) {
     interrupts();
     return false;
   }
+  uint32_t ts = g_lastDrdyTimestampUs;
+  uint32_t edges = g_drdyEdgesTotal;
+  g_drdyFlag = false;
+  interrupts();
+
+  // Deferred interval / jitter math, outside the ISR.
+  uint32_t interval = 0;
+  uint32_t missedFrame = 0;
+  if (g_prevDrdyTimestampUs != 0) {
+    interval = static_cast<uint32_t>(ts - g_prevDrdyTimestampUs);
+    uint32_t expected = g_expectedPeriodUs ? g_expectedPeriodUs : ADS_DRDY_PERIOD_US;
+    if (interval > expected + (expected / 2)) {
+      uint32_t missed = (interval / expected);
+      if (missed > 1) {
+        missedFrame = missed - 1;
+        g_missedDrdyTotal += missedFrame;
+      }
+    }
+    uint32_t jitterAbs = u32AbsDiff(interval, expected);
+    g_drdyIntervalLastUs = interval;
+    if (interval < g_drdyIntervalMinUs) g_drdyIntervalMinUs = interval;
+    if (interval > g_drdyIntervalMaxUs) g_drdyIntervalMaxUs = interval;
+    g_drdyIntervalCount++;
+    g_drdyIntervalSumUs += interval;
+    g_drdyJitterAbsLastUs = jitterAbs;
+    if (jitterAbs < g_drdyJitterAbsMinUs) g_drdyJitterAbsMinUs = jitterAbs;
+    if (jitterAbs > g_drdyJitterAbsMaxUs) g_drdyJitterAbsMaxUs = jitterAbs;
+    g_drdyJitterAbsSumUs += jitterAbs;
+  }
+  g_prevDrdyTimestampUs = ts;
+  g_missedDrdyFrame = missedFrame;
 
   out->ready = true;
-  out->drdyTimestampUs = g_lastDrdyTimestampUs;
-  out->drdyIntervalUs = g_drdyIntervalLastUs;
-  out->missedDrdyFrame = g_missedDrdyFrame;
+  out->drdyTimestampUs = ts;
+  out->drdyIntervalUs = interval;
+  out->missedDrdyFrame = missedFrame;
   out->missedDrdyTotal = g_missedDrdyTotal;
-  out->drdyEdgesTotal = g_drdyEdgesTotal;
-
-  g_drdyFlag = false;
+  out->drdyEdgesTotal = edges;
   g_missedDrdyFrame = 0;
-  interrupts();
   return true;
 }
 
@@ -91,37 +132,59 @@ void captureDrdyJitterSnapshot(DrdyJitterSnapshot* out) {
 }
 
 void printHelp() {
-  Serial.println();
-  Serial.println("EEGFrontier V1 commands:");
-  Serial.println("  HELP");
-  Serial.println("  INFO");
-  Serial.println("  STATS");
-  Serial.println("  REGS");
-  Serial.println("  START");
-  Serial.println("  STOP");
-  Serial.println("  MODE BIN");
-  Serial.println("  MODE CSV   (debug)");
-  Serial.println("  REINIT");
-  Serial.println("  TEST ON");
-  Serial.println("  TEST OFF");
-  Serial.println("  SELFTEST");
-  Serial.println("  LOFF ON");
-  Serial.println("  LOFF OFF");
-  Serial.println("  LOFF STATUS");
-  Serial.println("  PING");
-  Serial.println();
+  printLine("");
+  printLine("EEGFrontier V2 commands:");
+  printLine("  HELP");
+  printLine("  INFO");
+  printLine("  STATS");
+  printLine("  REGS            (STOP first when streaming)");
+  printLine("  START");
+  printLine("  STOP");
+  printLine("  MODE BIN");
+  printLine("  MODE CSV        (debug, throttled)");
+  printLine("  REINIT");
+  printLine("  TEST ON | TEST OFF");
+  printLine("  SELFTEST");
+  printLine("  LOFF ON | LOFF OFF | LOFF STATUS");
+  printLine("  SPS 250 | 500 | 1000");
+  printLine("  GAIN 1|2|4|6|8|12|24");
+  printLine("  VREF 2400 | 4500");
+  printLine("  PING [seq]");
+  printLine("");
 }
 
 void printInfo() {
-  Serial.println("# EEGFrontier V1");
-  printKV("firmware", "robust+diag");
-  printKV("transport", (g_outputMode == MODE_BIN) ? "bin+cobs+crc16" : "csv(debug)");
+  // In BIN+streaming, ASCII would glue to the next COBS frame on the host
+  // (it scans for 0x00 first), so report state as events only. Use STATS
+  // for live ASCII, or STOP first for full INFO.
+  if (g_streaming && g_outputMode == MODE_BIN) {
+    emitEventPacket(EVT_CONFIG, g_sampleRateSps, g_adsGain, g_adsVrefUv / 1000UL);
+    emitEventPacket(EVT_STREAM_STATE, 1, g_sessionId, g_sampleIndex);
+    emitErrorPacket(ERR_BUSY, 0, 0);
+    return;
+  }
+  // Reading ID touches SPI; refuse while streaming so RDATAC is never
+  // corrupted. STATS stays available because it never touches the ADC.
+  uint32_t cachedId = 0xFFFFFFFFUL;
+  bool wasStreaming = g_streaming;
+  bool restore = false;
+  if (!wasStreaming && g_adsReady) {
+    adsSendCommand(CMD_SDATAC);
+    delayMicroseconds(10);
+    cachedId = adsReadRegister(REG_ID);
+  }
+
+  printLine("# EEGFrontier V2");
+  printKV("firmware", FW_VERSION);
+  printKV("transport", (g_outputMode == MODE_BIN) ? "bin+cobs+crc16" : "csv(debug,throttled)");
+  printKVU32("proto_ver", PROTO_VER);
   printKVU32("serial_baud", SERIAL_BAUD);
   printKVU32("spi_hz", SPI_CLOCK_HZ);
   printKVU32("sample_rate_sps", g_sampleRateSps);
-  printKVU32("drdy_expected_period_us", (g_sampleRateSps > 0) ? (1000000UL / g_sampleRateSps) : 0);
+  printKVU32("drdy_expected_period_us", g_expectedPeriodUs);
   printKVU32("ads_vref_uv", g_adsVrefUv);
   printKVU32("ads_gain", g_adsGain);
+  printKVU32("session_id", g_sessionId);
   printKVU32("streaming", g_streaming ? 1 : 0);
   printKVU32("ads_ready", g_adsReady ? 1 : 0);
   printKVU32("test_signal", g_internalTestSignalEnabled ? 1 : 0);
@@ -145,9 +208,9 @@ void printInfo() {
   uint32_t lastDrdyUs = 0;
   noInterrupts();
   drdyEdgesTotal = g_drdyEdgesTotal;
-  missedTotal = g_missedDrdyTotal;
   lastDrdyUs = g_lastDrdyTimestampUs;
   interrupts();
+  missedTotal = g_missedDrdyTotal;
   printKVU32("drdy_edges_total", drdyEdgesTotal);
   printKVU32("missed_drdy_total", missedTotal);
   printKVU32("last_drdy_us", lastDrdyUs);
@@ -167,12 +230,24 @@ void printInfo() {
   printKVU32("pin_sck", PIN_SPI_SCK);
   printKVU32("pin_miso", PIN_SPI_MISO);
   printKVU32("pin_mosi", PIN_SPI_MOSI);
-  printKVU32("ads_id", adsReadRegister(REG_ID));
+  if (cachedId != 0xFFFFFFFFUL) {
+    printKVU32("ads_id", cachedId);
+  } else if (!wasStreaming) {
+    printKVU32("ads_id", adsReadRegister(REG_ID));
+  } else {
+    printLine("# ads_id=busy (STOP to read registers)");
+  }
+  if (g_adsVrefUv == ADS_VREF_UV_4500) {
+    printLine("# NOTE VREF 4500 on 3V3 AVDD is out of spec; VREF 2400 recommended");
+  }
+  printLine("# WARN no medical isolation: battery laptop or USB isolator only");
+  (void)restore;
 }
 
 void printStats() {
-  Serial.println("# STATS");
+  printLine("# STATS");
   printKVU32("sample_index", g_sampleIndex);
+  printKVU32("session_id", g_sessionId);
   printKVU32("recoveries_total", g_recoveriesTotal);
   printKVU32("status_invalid_total", g_statusInvalidTotal);
   printKVU32("lead_off_any_total", g_leadOffAnyTotal);
@@ -188,23 +263,49 @@ void printStats() {
 }
 
 void dumpRegisters() {
+  if (busyGuard("REGS")) {
+    return;
+  }
   uint8_t regs[0x18];
+  if (g_adsReady) {
+    adsSendCommand(CMD_SDATAC);
+    delayMicroseconds(10);
+  }
   adsReadRegisters(0x00, 0x18, regs);
 
-  Serial.println("# REG_DUMP_BEGIN");
+  printLine("# REG_DUMP_BEGIN");
   for (uint8_t i = 0; i < 0x18; i++) {
-    Serial.print("0x");
-    if (i < 16) {
-      Serial.print('0');
-    }
-    Serial.print(i, HEX);
-    Serial.print(",0x");
-    if (regs[i] < 16) {
-      Serial.print('0');
-    }
-    Serial.println(regs[i], HEX);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "0x%02X,0x%02X", i, regs[i]);
+    printLine(buf);
   }
-  Serial.println("# REG_DUMP_END");
+  printLine("# REG_DUMP_END");
+}
+
+static uint32_t parseU32Arg(const char* s, bool* ok) {
+  if (ok) {
+    *ok = false;
+  }
+  if (!s || !*s) {
+    return 0;
+  }
+  while (*s == ' ' || *s == '\t') {
+    s++;
+  }
+  uint32_t v = 0;
+  bool any = false;
+  while (*s >= '0' && *s <= '9') {
+    any = true;
+    v = v * 10 + static_cast<uint32_t>(*s - '0');
+    s++;
+  }
+  if (any && (*s == '\0' || *s == ' ' || *s == '\t')) {
+    if (ok) {
+      *ok = true;
+    }
+    return v;
+  }
+  return 0;
 }
 
 void processCommand(char* cmd) {
@@ -226,8 +327,24 @@ void processCommand(char* cmd) {
     return;
   }
 
-  if (std::strcmp(cmd, "PING") == 0) {
-    Serial.println("# PONG");
+  if (std::strncmp(cmd, "PING", 4) == 0 &&
+      (cmd[4] == '\0' || cmd[4] == ' ' || cmd[4] == '\t')) {
+    bool ok = false;
+    uint32_t seq = 0;
+    if (cmd[4] != '\0') {
+      seq = parseU32Arg(cmd + 5, &ok);
+    }
+    if (g_outputMode == MODE_BIN) {
+      emitEventPacket(EVT_PONG, ok ? seq : 0, micros(), 0);
+    } else {
+      if (ok) {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "# PONG seq=%lu", static_cast<unsigned long>(seq));
+        printLine(buf);
+      } else {
+        printLine("# PONG");
+      }
+    }
     return;
   }
 
@@ -273,22 +390,23 @@ void processCommand(char* cmd) {
       adsStopStreaming();
     }
     g_outputMode = MODE_BIN;
-    Serial.println("# OK MODE BIN");
+    printLine("# OK MODE BIN");
     return;
   }
 
   if (std::strcmp(cmd, "MODE CSV") == 0) {
-    if (!CSV_DEBUG_ENABLED) {
-      Serial.println("# ERR CSV_DISABLED");
-      return;
-    }
+#if !CSV_DEBUG_ENABLED
+    printLine("# ERR CSV_DISABLED");
+    return;
+#else
     if (g_streaming) {
       adsStopStreaming();
     }
     g_outputMode = MODE_CSV;
-    Serial.println("# OK MODE CSV");
-    Serial.println("# WARN CSV_DEBUG_ONLY");
+    printLine("# OK MODE CSV");
+    printLine("# WARN CSV_DEBUG_ONLY throttled when USB backs up");
     return;
+#endif
   }
 
   if (std::strcmp(cmd, "TEST ON") == 0) {
@@ -297,12 +415,12 @@ void processCommand(char* cmd) {
       adsStopStreaming();
     }
     if (adsSetInternalTestSignal(true)) {
-      Serial.println("# OK TEST ON");
+      printLine("# OK TEST ON");
       if (wasStreaming) {
         adsStartStreaming();
       }
     } else {
-      Serial.println("# ERR TEST_ON_FAIL");
+      printLine("# ERR TEST_ON_FAIL");
     }
     return;
   }
@@ -313,20 +431,20 @@ void processCommand(char* cmd) {
       adsStopStreaming();
     }
     if (adsSetInternalTestSignal(false)) {
-      Serial.println("# OK TEST OFF");
+      printLine("# OK TEST OFF");
       if (wasStreaming) {
         adsStartStreaming();
       }
     } else {
-      Serial.println("# ERR TEST_OFF_FAIL");
+      printLine("# ERR TEST_OFF_FAIL");
     }
     return;
   }
 
   if (std::strcmp(cmd, "SELFTEST") == 0) {
-    Serial.println("# SELFTEST RUNNING");
+    printLine("# SELFTEST RUNNING");
     bool ok = adsRunInternalSelfTest(32);
-    Serial.println(ok ? "# SELFTEST PASS" : "# SELFTEST FAIL");
+    printLine(ok ? "# SELFTEST PASS" : "# SELFTEST FAIL");
     return;
   }
 
@@ -336,12 +454,12 @@ void processCommand(char* cmd) {
       adsStopStreaming();
     }
     if (adsSetLeadOffDiagnostics(true)) {
-      Serial.println("# OK LOFF ON");
+      printLine("# OK LOFF ON");
       if (wasStreaming) {
         adsStartStreaming();
       }
     } else {
-      Serial.println("# ERR LOFF_ON_FAIL");
+      printLine("# ERR LOFF_ON_FAIL");
     }
     return;
   }
@@ -352,12 +470,12 @@ void processCommand(char* cmd) {
       adsStopStreaming();
     }
     if (adsSetLeadOffDiagnostics(false)) {
-      Serial.println("# OK LOFF OFF");
+      printLine("# OK LOFF OFF");
       if (wasStreaming) {
         adsStartStreaming();
       }
     } else {
-      Serial.println("# ERR LOFF_OFF_FAIL");
+      printLine("# ERR LOFF_OFF_FAIL");
     }
     return;
   }
@@ -367,8 +485,57 @@ void processCommand(char* cmd) {
     return;
   }
 
-  Serial.print("# ERR UNKNOWN_CMD ");
-  Serial.println(cmd);
+  if (std::strncmp(cmd, "SPS", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\t')) {
+    bool ok = false;
+    uint32_t v = parseU32Arg(cmd + 4, &ok);
+    if (!ok || !adsSetSampleRate(v)) {
+      printLine("# ERR SPS use 250|500|1000");
+    } else {
+      char buf[40];
+      snprintf(buf, sizeof(buf), "# OK SPS %lu", static_cast<unsigned long>(g_sampleRateSps));
+      printLine(buf);
+    }
+    return;
+  }
+
+  if (std::strncmp(cmd, "GAIN", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\t')) {
+    bool ok = false;
+    uint32_t v = parseU32Arg(cmd + 5, &ok);
+    if (!ok || !adsSetGain(static_cast<uint8_t>(v))) {
+      printLine("# ERR GAIN use 1|2|4|6|8|12|24");
+    } else {
+      char buf[40];
+      snprintf(buf, sizeof(buf), "# OK GAIN %u", g_adsGain);
+      printLine(buf);
+    }
+    return;
+  }
+
+  if (std::strncmp(cmd, "VREF", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\t')) {
+    bool ok = false;
+    uint32_t v = parseU32Arg(cmd + 5, &ok);
+    // Accept millivolts (2400/4500) or microvolts (2400000/4500000).
+    uint32_t asUv = v;
+    if (ok && v <= 10000UL) {
+      asUv = v * 1000UL;
+    }
+    if (!ok || !adsSetVrefUv(asUv)) {
+      printLine("# ERR VREF use 2400|4500");
+    } else {
+      char buf[48];
+      snprintf(buf, sizeof(buf), "# OK VREF %lu",
+               static_cast<unsigned long>(g_adsVrefUv / 1000UL));
+      printLine(buf);
+    }
+    return;
+  }
+
+  if (g_streaming && g_outputMode == MODE_BIN) {
+    emitErrorPacket(ERR_BUSY, 0, 0);
+    return;
+  }
+  printLine("# ERR UNKNOWN_CMD");
+  printLine(cmd);
 }
 
 void handleSerialCommands() {
@@ -390,17 +557,38 @@ void handleSerialCommands() {
       g_cmdBuf[g_cmdLen++] = c;
     } else {
       g_cmdLen = 0;
-      Serial.println("# ERR CMD_TOO_LONG");
+      printLine("# ERR CMD_TOO_LONG");
     }
   }
 }
 
 void handleButton() {
   bool nowState = digitalRead(PIN_BTN_START);
+  uint32_t now = millis();
 
   if (g_lastBtnState == HIGH && nowState == LOW) {
-    uint32_t now = millis();
-    if (static_cast<uint32_t>(now - g_lastButtonToggleMs) > 250) {
+    // Press start: debounce, then wait to distinguish short vs long press.
+    if (static_cast<uint32_t>(now - g_lastButtonToggleMs) > 60) {
+      g_buttonPressStartMs = now;
+      g_buttonLongFired = false;
+    }
+  }
+
+  if (g_lastBtnState == LOW && nowState == LOW && !g_buttonLongFired) {
+    if (static_cast<uint32_t>(now - g_buttonPressStartMs) > 1500) {
+      g_buttonLongFired = true;
+      g_lastButtonToggleMs = now;
+      g_pendingBtnFlag = true;
+      printLine("# SELFTEST RUNNING (button)");
+      bool ok = adsRunInternalSelfTest(32);
+      printLine(ok ? "# SELFTEST PASS" : "# SELFTEST FAIL");
+    }
+  }
+
+  if (g_lastBtnState == LOW && nowState == HIGH) {
+    if (!g_buttonLongFired &&
+        static_cast<uint32_t>(now - g_lastButtonToggleMs) > 250 &&
+        static_cast<uint32_t>(now - g_buttonPressStartMs) > 60) {
       g_lastButtonToggleMs = now;
       g_pendingBtnFlag = true;
       if (g_streaming) {
@@ -415,34 +603,10 @@ void handleButton() {
 }
 
 void onDrdyFalling() {
+  // Keep this minimal: timestamp and count only. Everything else runs
+  // deferred in capturePendingDrdySnapshot().
   uint32_t nowUs = micros();
   g_drdyEdgesTotal++;
   g_lastDrdyTimestampUs = nowUs;
-
-  if (g_prevDrdyTimestampUs != 0) {
-    uint32_t dt = static_cast<uint32_t>(nowUs - g_prevDrdyTimestampUs);
-    uint32_t expectedUs = (g_sampleRateSps > 0) ? (1000000UL / g_sampleRateSps) : ADS_DRDY_PERIOD_US;
-    uint32_t jitterAbs = u32AbsDiff(dt, expectedUs);
-
-    g_drdyIntervalLastUs = dt;
-    if (dt < g_drdyIntervalMinUs) g_drdyIntervalMinUs = dt;
-    if (dt > g_drdyIntervalMaxUs) g_drdyIntervalMaxUs = dt;
-    g_drdyIntervalCount++;
-    g_drdyIntervalSumUs += dt;
-
-    g_drdyJitterAbsLastUs = jitterAbs;
-    if (jitterAbs < g_drdyJitterAbsMinUs) g_drdyJitterAbsMinUs = jitterAbs;
-    if (jitterAbs > g_drdyJitterAbsMaxUs) g_drdyJitterAbsMaxUs = jitterAbs;
-    g_drdyJitterAbsSumUs += jitterAbs;
-  }
-
-  g_prevDrdyTimestampUs = nowUs;
-
-  if (g_drdyFlag) {
-    g_missedDrdyTotal++;
-    g_missedDrdyFrame++;
-  } else {
-    g_drdyFlag = true;
-  }
+  g_drdyFlag = true;
 }
-

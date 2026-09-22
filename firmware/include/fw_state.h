@@ -30,33 +30,46 @@ struct DrdyJitterSnapshot {
 extern OutputMode g_outputMode;
 
 extern SPISettings g_spiSettings;
+// Expected DRDY period in us, derived from the active sample rate so the
+// ISR never divides. Updated whenever SPS changes.
+extern uint32_t g_expectedPeriodUs;
 
+// Minimal ISR state: the ISR only timestamps and counts. Interval and
+// jitter math runs later with interrupts disabled, in snapshot code.
 extern volatile bool g_drdyFlag;
-extern volatile uint32_t g_missedDrdyTotal;
-extern volatile uint32_t g_missedDrdyFrame;
-extern volatile uint32_t g_drdyEdgesTotal;
 extern volatile uint32_t g_lastDrdyTimestampUs;
-extern volatile uint32_t g_prevDrdyTimestampUs;
-extern volatile uint32_t g_drdyIntervalLastUs;
-extern volatile uint32_t g_drdyIntervalMinUs;
-extern volatile uint32_t g_drdyIntervalMaxUs;
-extern volatile uint32_t g_drdyJitterAbsLastUs;
-extern volatile uint32_t g_drdyJitterAbsMinUs;
-extern volatile uint32_t g_drdyJitterAbsMaxUs;
-extern volatile uint32_t g_drdyIntervalCount;
-extern volatile uint64_t g_drdyIntervalSumUs;
-extern volatile uint64_t g_drdyJitterAbsSumUs;
+extern volatile uint32_t g_drdyEdgesTotal;
+
+// Deferred DRDY stats, touched only outside the ISR.
+extern uint32_t g_missedDrdyTotal;
+extern uint32_t g_missedDrdyFrame;
+extern uint32_t g_prevDrdyTimestampUs;
+extern uint32_t g_drdyIntervalLastUs;
+extern uint32_t g_drdyIntervalMinUs;
+extern uint32_t g_drdyIntervalMaxUs;
+extern uint32_t g_drdyJitterAbsLastUs;
+extern uint32_t g_drdyJitterAbsMinUs;
+extern uint32_t g_drdyJitterAbsMaxUs;
+extern uint32_t g_drdyIntervalCount;
+extern uint64_t g_drdyIntervalSumUs;
+extern uint64_t g_drdyJitterAbsSumUs;
 
 extern bool g_streaming;
 extern bool g_adsReady;
 extern bool g_pendingRecoveredFlag;
 extern bool g_pendingBtnFlag;
 extern bool g_pendingTxOverflowFlag;
+extern bool g_pendingConfigFlag;
 
+// Monotonic counters: sample_index never resets after boot so hosts can
+// detect gaps across START/STOP and recovery cycles.
 extern uint32_t g_sampleIndex;
+extern uint32_t g_sessionId;
 extern uint32_t g_recoveriesTotal;
 extern uint32_t g_lastGoodFrameUs;
 extern uint32_t g_lastButtonToggleMs;
+extern uint32_t g_buttonPressStartMs;
+extern bool g_buttonLongFired;
 extern uint32_t g_lastSampleProcessUs;
 extern uint32_t g_lastDrdyToProcessLatencyUs;
 
