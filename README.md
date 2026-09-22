@@ -1,5 +1,7 @@
 # EEGFrontier V1
 
+[![CI](https://github.com/TheusHen/EEGFrontier/actions/workflows/ci.yml/badge.svg)](https://github.com/TheusHen/EEGFrontier/actions/workflows/ci.yml)
+
 > [!WARNING]
 > **Hardware V2 Under Development**
 > The current version of this project (V1) has pending schematic and layout revisions. **V2 is under active development** with all necessary fixes. If you plan to fabricate or assemble this board, please **wait for the official V2 tag and release** before sending files to the fab.
