@@ -6,7 +6,8 @@
 
 namespace {
 
-constexpr size_t TX_RING_SIZE = 8192;
+constexpr size_t TX_RING_SIZE = 16384;
+constexpr size_t TX_HIGH_WATER = (TX_RING_SIZE * 3) / 4;
 uint8_t s_txRing[TX_RING_SIZE];
 size_t s_head = 0;
 size_t s_tail = 0;
@@ -79,27 +80,38 @@ bool txWriteCString(const char* s) {
   return txWriteBytes(reinterpret_cast<const uint8_t*>(s), std::strlen(s));
 }
 
+bool txAboveHighWater() {
+  return s_count >= TX_HIGH_WATER;
+}
+
 void txService() {
   if (s_count == 0) {
     return;
   }
 
-  int available = Serial.availableForWrite();
-  if (available <= 0) {
-    return;
-  }
+  // Drain in bounded chunks so a full USB endpoint never starves sampling.
+  for (uint8_t round = 0; round < 4 && s_count > 0; round++) {
+    int available = Serial.availableForWrite();
+    if (available <= 0) {
+      return;
+    }
 
-  size_t chunk = min(static_cast<size_t>(available), contiguousReadable());
-  if (chunk == 0) {
-    return;
-  }
+    size_t chunk = min(static_cast<size_t>(available), contiguousReadable());
+    if (chunk == 0) {
+      return;
+    }
+    // Cap single writes; CDC writes above ~512B tend to block on RP2040.
+    if (chunk > 512) {
+      chunk = 512;
+    }
 
-  size_t written = Serial.write(&s_txRing[s_tail], chunk);
-  if (written == 0) {
-    return;
-  }
+    size_t written = Serial.write(&s_txRing[s_tail], chunk);
+    if (written == 0) {
+      return;
+    }
 
-  s_tail = (s_tail + written) % TX_RING_SIZE;
-  s_count -= written;
+    s_tail = (s_tail + written) % TX_RING_SIZE;
+    s_count -= written;
+  }
 }
 

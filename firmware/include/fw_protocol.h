@@ -13,6 +13,7 @@ bool emitErrorPacket(uint8_t errorCode, uint32_t a = 0, uint32_t b = 0);
 bool emitSamplePacket(uint32_t t_us, uint32_t status24,
                       int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4,
                       uint32_t flags, uint32_t missedDrdyFrame, uint32_t recoveriesTotal);
+void emitHelloPacket();
 void emitCsvFrame(uint32_t drdy_t_us, uint32_t proc_t_us, uint32_t drdy_interval_us,
                   uint32_t status24,
                   int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4,

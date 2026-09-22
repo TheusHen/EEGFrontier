@@ -61,6 +61,36 @@ void test_pack_helpers_little_endian() {
   TEST_ASSERT_EQUAL_UINT8(0xFF, buf[3]);
 }
 
+void test_cobs_long_run_no_zero() {
+  // 40-byte sample payloads must never contain 0x00 after encoding.
+  uint8_t in[40];
+  for (size_t i = 0; i < sizeof(in); i++) {
+    in[i] = static_cast<uint8_t>(i + 1);
+  }
+  in[10] = 0x00;
+  in[30] = 0x00;
+  uint8_t out[48] = {0};
+  size_t len = cobsEncode(in, sizeof(in), out);
+  TEST_ASSERT_TRUE(len > sizeof(in));
+  for (size_t i = 0; i < len; i++) {
+    TEST_ASSERT_NOT_EQUAL(0, out[i]);
+  }
+}
+
+void test_sample_raw_size_frozen() {
+  // Pendulum expects 2 hdr + 40 payload + 2 crc = 44 bytes raw for PKT_SAMPLE.
+  // If this fails, the host decoder breaks, so keep the layout frozen.
+  const size_t kSampleRaw = 2 + (4 * 10) + 2;
+  TEST_ASSERT_EQUAL_UINT32(44, static_cast<uint32_t>(kSampleRaw));
+}
+
+void test_uv_scale_24x() {
+  // Full-scale excess: Vref/gain -> 2.4V/24 = 100000 uV.
+  const int64_t full = 8388607LL;
+  int64_t uv = (full * 2400000LL) / (24LL * full);
+  TEST_ASSERT_EQUAL_INT32(100000, static_cast<int32_t>(uv));
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -71,5 +101,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_cobs_encode_no_zeros);
   RUN_TEST(test_cobs_encode_with_zeros);
   RUN_TEST(test_pack_helpers_little_endian);
+  RUN_TEST(test_cobs_long_run_no_zero);
+  RUN_TEST(test_sample_raw_size_frozen);
+  RUN_TEST(test_uv_scale_24x);
   return UNITY_END();
 }

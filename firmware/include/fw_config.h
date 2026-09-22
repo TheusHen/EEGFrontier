@@ -2,9 +2,9 @@
 
 #include <Arduino.h>
 
-// EEGFrontier V1
+// EEGFrontier V2 firmware (same V1 board: XIAO RP2040 + ADS1299-4).
 //
-// PINOUT:
+// PINOUT (unchanged from V1):
 // D0  -> EEG_RESET
 // D1  -> EEG_START
 // D2  -> EEG_DRDY
@@ -15,25 +15,37 @@
 // D9  -> SPI_MISO
 // D10 -> SPI_MOSI
 //
-// Serial commands:
+// Serial commands (V2):
 //   HELP
 //   INFO
+//   STATS
 //   REGS
 //   START
 //   STOP
 //   MODE BIN
-//   MODE CSV
+//   MODE CSV        (debug only, throttled while streaming)
 //   REINIT
-//   PING
+//   PING [seq]
+//   TEST ON | TEST OFF
+//   SELFTEST
+//   LOFF ON | LOFF OFF | LOFF STATUS
+//   SPS 250 | 500 | 1000
+//   GAIN 1 | 2 | 4 | 6 | 8 | 12 | 24
+//   VREF 2400 | 4500
 //
-// BIN protocol:
+// BIN protocol (unchanged framing, see firmware/PROTOCOL_V2.md):
 //   packet = COBS(raw_packet) + 0x00
 //   raw_packet = [type][ver][payload...][crc16_le]
 //
 // Types:
-//   0x01 = sample packet
+//   0x01 = sample packet (40 bytes raw, layout frozen for Pendulum compat)
 //   0x02 = event/status packet
 //   0x7F = error packet
+
+// Firmware identity
+constexpr char FW_NAME[] = "EEGFrontier";
+constexpr char FW_VERSION[] = "2.0.0";
+constexpr uint16_t FW_VERSION_U16 = 0x0200;
 
 // Pins
 constexpr uint8_t PIN_EEG_RESET  = D0;
@@ -48,14 +60,31 @@ constexpr uint8_t PIN_SPI_MISO   = D9;
 constexpr uint8_t PIN_SPI_MOSI   = D10;
 
 // Serial / SPI config
+//
+// NOTE: on the RP2040 native USB CDC the baud setting is ignored by the
+// host driver; it only matters for real UART bridges. Kept so INFO stays
+// honest about what the host asked for, and so serial monitors pick a
+// fast default.
 constexpr uint32_t SERIAL_BAUD  = 921600;
-constexpr uint32_t SPI_CLOCK_HZ = 1000000;
-constexpr bool CSV_DEBUG_ENABLED = true;  // CSV is debug-only (heavier transport)
+constexpr uint32_t SPI_CLOCK_HZ = 2000000;
+#if !defined(CSV_DEBUG_ENABLED)
+#define CSV_DEBUG_ENABLED 1  // CSV stays available but is throttled, debug only
+#endif
 
-// ADS1299 scaling / timing defaults (V1 config)
-constexpr uint32_t ADS_VREF_UV = 4500000UL;
+// ADS1299 scaling / timing defaults.
+//
+// The V1 board routes AVDD from the 3.3 V rail, so the 4.5 V internal
+// reference is out of spec (it wants ~5 V AVDD). The driver still boots
+// with the legacy 4.5 V setting for backward compatibility with existing
+// captures, but VREF 2400 is the recommended operating point on this
+// board and can be selected at runtime. Host uV conversion must use the
+// matching VREF (see HELLO event / INFO ads_vref_uv).
+constexpr uint32_t ADS_VREF_UV_4500 = 4500000UL;
+constexpr uint32_t ADS_VREF_UV_2400 = 2400000UL;
+constexpr uint32_t ADS_VREF_UV = ADS_VREF_UV_4500;
 constexpr uint8_t ADS_DEFAULT_GAIN = 24;
 constexpr uint32_t ADS_DEFAULT_SPS = 250;
+constexpr uint32_t ADS_DEFAULT_VREF_UV = ADS_VREF_UV_4500;
 constexpr uint32_t ADS_DRDY_PERIOD_US = 1000000UL / ADS_DEFAULT_SPS;
 
 // ADS1299 commands
@@ -87,13 +116,29 @@ constexpr uint8_t REG_MISC1       = 0x15;
 constexpr uint8_t REG_MISC2       = 0x16;
 constexpr uint8_t REG_CONFIG4     = 0x17;
 
-// Protocol constants
+// Protocol constants (sample layout frozen; events/errors are additive)
 constexpr uint8_t PKT_SAMPLE = 0x01;
 constexpr uint8_t PKT_EVENT  = 0x02;
 constexpr uint8_t PKT_ERROR  = 0x7F;
 constexpr uint8_t PROTO_VER  = 0x01;
 
-// Flags
+// Event codes (additive in V2, old hosts ignore unknown ones)
+constexpr uint8_t EVT_STREAM_STATE = 0x01;
+constexpr uint8_t EVT_HELLO        = 0x02;
+constexpr uint8_t EVT_ADS_INIT_OK  = 0x10;
+constexpr uint8_t EVT_PONG         = 0x11;
+constexpr uint8_t EVT_SELFTEST     = 0x30;
+constexpr uint8_t EVT_CONFIG       = 0x31;
+constexpr uint8_t EVT_TX_HIGH_WATER = 0x32;
+
+// Error codes (additive in V2)
+constexpr uint8_t ERR_ADS_INIT_FAIL   = 0xE1;
+constexpr uint8_t ERR_FRAME_READ_FAIL = 0xE2;
+constexpr uint8_t ERR_DRDY_TIMEOUT    = 0xE3;
+constexpr uint8_t ERR_TX_OVERFLOW     = 0xE4;
+constexpr uint8_t ERR_BUSY            = 0xE5;
+
+// Flags (bits 0-6 frozen for Pendulum compat; bit 7+ new in V2)
 constexpr uint32_t FLAG_STREAMING   = (1u << 0);
 constexpr uint32_t FLAG_RECOVERED   = (1u << 1);
 constexpr uint32_t FLAG_BTN_TOGGLED = (1u << 2);
@@ -101,6 +146,7 @@ constexpr uint32_t FLAG_DRDY_MISSED = (1u << 3);
 constexpr uint32_t FLAG_STATUS_INVALID = (1u << 4);
 constexpr uint32_t FLAG_ADS_LOFF_ANY   = (1u << 5);
 constexpr uint32_t FLAG_TX_OVERFLOW    = (1u << 6);
+constexpr uint32_t FLAG_CONFIG_CHANGED = (1u << 7);
 
 // ADS status word helpers (ADS1299 RDATAC status bytes)
 constexpr uint32_t ADS_STATUS_HEADER_MASK = 0xF00000UL;

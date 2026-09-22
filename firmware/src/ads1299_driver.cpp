@@ -1,6 +1,7 @@
 #include "ads1299_driver.h"
 
 #include <climits>
+#include <cstdio>
 #include <SPI.h>
 
 #include "fw_commands.h"
@@ -13,22 +14,61 @@
 
 namespace {
 
-constexpr uint8_t ADS_CH_NORMAL_24X = 0x60;
-constexpr uint8_t ADS_CH_TEST_24X = 0x65;   // MUX=test signal
+// CONFIG1 encodings used here (HR mode, internal 2.048 MHz clock).
+// 0x96 = 250 SPS, 0x95 = 500 SPS, 0x94 = 1000 SPS. Confirmed against the
+// ADS1299 datasheet DR table; re-check with a scope if the clock source
+// ever changes.
+constexpr uint8_t ADS_CONFIG1_250 = 0x96;
+constexpr uint8_t ADS_CONFIG1_500 = 0x95;
+constexpr uint8_t ADS_CONFIG1_1000 = 0x94;
+
 constexpr uint8_t ADS_CONFIG2_NORMAL = 0xD0;
-constexpr uint8_t ADS_CONFIG2_TEST_FAST = 0xD3;  // internal test enabled (validate on hardware)
-constexpr uint8_t ADS_LOFF_DIAG_CFG = 0x13;      // conservative diagnostic preset
+constexpr uint8_t ADS_CONFIG2_TEST = 0xD3;
+constexpr uint8_t ADS_CONFIG3_VREF_4500 = 0xEC;
+constexpr uint8_t ADS_CONFIG3_VREF_2400 = 0xCC;
+constexpr uint8_t ADS_LOFF_DIAG_CFG = 0x13;
 constexpr uint8_t ADS_LOFF_ALL_4CH_MASK = 0x0F;
 
 static inline void adsSelect() { digitalWrite(PIN_SPI_CS, LOW); }
 static inline void adsDeselect() { digitalWrite(PIN_SPI_CS, HIGH); }
 
+uint8_t gainToBits(uint8_t gain) {
+  switch (gain) {
+    case 1: return 0x00;
+    case 2: return 0x10;
+    case 4: return 0x20;
+    case 6: return 0x30;
+    case 8: return 0x40;
+    case 12: return 0x50;
+    case 24:
+    default: return 0x60;
+  }
+}
+
 uint8_t adsChannelConfigValue() {
-  return g_internalTestSignalEnabled ? ADS_CH_TEST_24X : ADS_CH_NORMAL_24X;
+  uint8_t base = gainToBits(g_adsGain);
+  if (g_internalTestSignalEnabled) {
+    return static_cast<uint8_t>(base | 0x05);
+  }
+  return base;
+}
+
+uint8_t adsConfig1Value() {
+  if (g_sampleRateSps >= 1000) {
+    return ADS_CONFIG1_1000;
+  }
+  if (g_sampleRateSps >= 500) {
+    return ADS_CONFIG1_500;
+  }
+  return ADS_CONFIG1_250;
 }
 
 uint8_t adsConfig2Value() {
-  return g_internalTestSignalEnabled ? ADS_CONFIG2_TEST_FAST : ADS_CONFIG2_NORMAL;
+  return g_internalTestSignalEnabled ? ADS_CONFIG2_TEST : ADS_CONFIG2_NORMAL;
+}
+
+uint8_t adsConfig3Value() {
+  return (g_adsVrefUv <= 3000000UL) ? ADS_CONFIG3_VREF_2400 : ADS_CONFIG3_VREF_4500;
 }
 
 uint32_t statusLeadOffP(uint32_t status24) {
@@ -82,9 +122,12 @@ void parseChannelsFromFrame(const uint8_t* frame, int32_t* ch1, int32_t* ch2, in
 void resetStreamEdgeStats() {
   noInterrupts();
   g_drdyFlag = false;
-  g_missedDrdyFrame = 0;
-  g_prevDrdyTimestampUs = 0;
   g_lastDrdyTimestampUs = 0;
+  g_drdyEdgesTotal = 0;
+  interrupts();
+  g_missedDrdyFrame = 0;
+  g_missedDrdyTotal = 0;
+  g_prevDrdyTimestampUs = 0;
   g_drdyIntervalLastUs = 0;
   g_drdyIntervalMinUs = 0xFFFFFFFFUL;
   g_drdyIntervalMaxUs = 0;
@@ -94,7 +137,6 @@ void resetStreamEdgeStats() {
   g_drdyIntervalCount = 0;
   g_drdyIntervalSumUs = 0;
   g_drdyJitterAbsSumUs = 0;
-  interrupts();
 }
 
 bool writeChannelMuxAll(uint8_t channelRegValue) {
@@ -109,10 +151,13 @@ bool writeChannelMuxAll(uint8_t channelRegValue) {
          (adsReadRegister(REG_CH4SET) == channelRegValue);
 }
 
+void refreshExpectedPeriod() {
+  g_expectedPeriodUs = (g_sampleRateSps > 0) ? (1000000UL / g_sampleRateSps) : ADS_DRDY_PERIOD_US;
+}
+
 }  // namespace
 
 int32_t adsCountsToMicrovolts(int32_t counts) {
-  // ADS1299 LSB ~= Vref / (gain * (2^23 - 1))
   constexpr int64_t kFullScaleCode = 8388607LL;
   if (g_adsGain == 0) {
     return 0;
@@ -156,6 +201,9 @@ void adsWriteRegister(uint8_t reg, uint8_t value) {
 }
 
 void adsReadRegisters(uint8_t startReg, uint8_t count, uint8_t* dest) {
+  if (!dest || count == 0) {
+    return;
+  }
   SPI.beginTransaction(g_spiSettings);
   adsSelect();
   SPI.transfer(0x20 | (startReg & 0x1F));
@@ -169,7 +217,24 @@ void adsReadRegisters(uint8_t startReg, uint8_t count, uint8_t* dest) {
   delayMicroseconds(2);
 }
 
+bool adsEnsureIdleForRegAccess(bool* wasStreaming) {
+  bool was = g_streaming;
+  if (wasStreaming) {
+    *wasStreaming = was;
+  }
+  if (was) {
+    adsStopStreaming();
+    delayMicroseconds(50);
+  } else if (g_adsReady) {
+    // Even idle, make sure we are out of RDATAC before touching registers.
+    adsSendCommand(CMD_SDATAC);
+    delayMicroseconds(10);
+  }
+  return was;
+}
+
 void adsHardwareReset() {
+  digitalWrite(PIN_EEG_START, LOW);
   digitalWrite(PIN_EEG_RESET, HIGH);
   delay(5);
   digitalWrite(PIN_EEG_RESET, LOW);
@@ -182,9 +247,10 @@ bool adsConfigureRegisters() {
   adsSendCommand(CMD_SDATAC);
   delay(5);
 
-  adsWriteRegister(REG_CONFIG1, 0x96);                 // HR, 250 SPS
-  adsWriteRegister(REG_CONFIG2, adsConfig2Value());    // normal or internal test
-  adsWriteRegister(REG_CONFIG3, 0xEC);
+  const uint8_t config1 = adsConfig1Value();
+  adsWriteRegister(REG_CONFIG1, config1);
+  adsWriteRegister(REG_CONFIG2, adsConfig2Value());
+  adsWriteRegister(REG_CONFIG3, adsConfig3Value());
   adsWriteRegister(REG_LOFF, g_leadOffDiagEnabled ? ADS_LOFF_DIAG_CFG : 0x00);
 
   if (!writeChannelMuxAll(adsChannelConfigValue())) {
@@ -204,17 +270,15 @@ bool adsConfigureRegisters() {
 
   delay(2);
 
-  if (adsReadRegister(REG_CONFIG1) != 0x96) return false;
+  if (adsReadRegister(REG_CONFIG1) != config1) return false;
   if (adsReadRegister(REG_CONFIG2) != adsConfig2Value()) return false;
-  if (adsReadRegister(REG_CONFIG3) != 0xEC) return false;
+  if (adsReadRegister(REG_CONFIG3) != adsConfig3Value()) return false;
   if (adsReadRegister(REG_LOFF) != (g_leadOffDiagEnabled ? ADS_LOFF_DIAG_CFG : 0x00)) return false;
   if (adsReadRegister(REG_LOFF_SENSP) != (g_leadOffDiagEnabled ? ADS_LOFF_ALL_4CH_MASK : 0x00)) return false;
   if (adsReadRegister(REG_LOFF_SENSN) != (g_leadOffDiagEnabled ? ADS_LOFF_ALL_4CH_MASK : 0x00)) return false;
   if (!writeChannelMuxAll(adsChannelConfigValue())) return false;
 
-  g_sampleRateSps = ADS_DEFAULT_SPS;
-  g_adsGain = ADS_DEFAULT_GAIN;
-  g_adsVrefUv = ADS_VREF_UV;
+  refreshExpectedPeriod();
   return true;
 }
 
@@ -242,11 +306,19 @@ bool adsInitRobust(uint8_t attempts) {
     fwWatchdogFeed();
     if (adsInitOnce()) {
       g_adsReady = true;
+      uint8_t id = adsReadRegister(REG_ID);
       if (g_outputMode == MODE_BIN) {
-        emitEventPacket(0x10, adsReadRegister(REG_ID), i + 1, 0);
+        emitEventPacket(EVT_ADS_INIT_OK, id, i + 1, g_sampleRateSps);
+        if (id != 0x1E && id != 0x12) {
+          emitEventPacket(EVT_CONFIG, 0x4944 /*ID*/, id, 0);
+        }
       } else {
-        Serial.print("# ADS_INIT_OK attempt=");
-        Serial.println(i + 1);
+        printLine("# ADS_INIT_OK");
+        printKVU32("# attempt", i + 1);
+        printKVU32("# ads_id", id);
+        if (id != 0x1E && id != 0x12) {
+          printLine("# WARN unexpected ADS ID, check wiring");
+        }
       }
       return true;
     }
@@ -255,11 +327,32 @@ bool adsInitRobust(uint8_t attempts) {
 
   g_adsReady = false;
   if (g_outputMode == MODE_BIN) {
-    emitErrorPacket(0xE1, 0, 0);
+    emitErrorPacket(ERR_ADS_INIT_FAIL, 0, 0);
   } else {
-    Serial.println("# ERR ADS_INIT_FAIL");
+    printLine("# ERR ADS_INIT_FAIL");
   }
   return false;
+}
+
+static bool reconfigureKeepingStream(bool* restarted) {
+  bool wasStreaming = g_streaming;
+  if (wasStreaming) {
+    adsStopStreaming();
+  }
+  bool ok = adsConfigureRegisters();
+  if (ok) {
+    g_pendingConfigFlag = true;
+    if (g_outputMode == MODE_BIN) {
+      emitEventPacket(EVT_CONFIG, g_sampleRateSps, g_adsGain, g_adsVrefUv / 1000UL);
+    }
+  }
+  if (wasStreaming && ok) {
+    adsStartStreaming();
+  }
+  if (restarted) {
+    *restarted = wasStreaming && ok;
+  }
+  return ok;
 }
 
 bool adsSetInternalTestSignal(bool enable) {
@@ -284,6 +377,70 @@ bool adsSetLeadOffDiagnostics(bool enable) {
   return true;
 }
 
+bool adsSetSampleRate(uint32_t sps) {
+  uint32_t target;
+  if (sps <= 250) {
+    target = 250;
+  } else if (sps <= 500) {
+    target = 500;
+  } else {
+    target = 1000;
+  }
+  if (target == g_sampleRateSps) {
+    return true;
+  }
+  uint32_t old = g_sampleRateSps;
+  g_sampleRateSps = target;
+  if (!reconfigureKeepingStream(nullptr)) {
+    g_sampleRateSps = old;
+    (void)adsConfigureRegisters();
+    return false;
+  }
+  return true;
+}
+
+bool adsSetGain(uint8_t gain) {
+  uint8_t target;
+  switch (gain) {
+    case 1: case 2: case 4: case 6: case 8: case 12: case 24:
+      target = gain;
+      break;
+    default:
+      return false;
+  }
+  if (target == g_adsGain) {
+    return true;
+  }
+  uint8_t old = g_adsGain;
+  g_adsGain = target;
+  if (!reconfigureKeepingStream(nullptr)) {
+    g_adsGain = old;
+    (void)adsConfigureRegisters();
+    return false;
+  }
+  return true;
+}
+
+bool adsSetVrefUv(uint32_t vrefUv) {
+  uint32_t target;
+  if (vrefUv <= 3000000UL) {
+    target = ADS_VREF_UV_2400;
+  } else {
+    target = ADS_VREF_UV_4500;
+  }
+  if (target == g_adsVrefUv) {
+    return true;
+  }
+  uint32_t old = g_adsVrefUv;
+  g_adsVrefUv = target;
+  if (!reconfigureKeepingStream(nullptr)) {
+    g_adsVrefUv = old;
+    (void)adsConfigureRegisters();
+    return false;
+  }
+  return true;
+}
+
 void adsStartStreaming() {
   if (!g_adsReady) {
     if (!adsInitRobust()) {
@@ -292,14 +449,14 @@ void adsStartStreaming() {
   }
 
   resetStreamEdgeStats();
-  g_sampleIndex = 0;
+  // sample_index stays monotonic across sessions; session_id separates runs.
+  g_sessionId++;
   g_lastGoodFrameUs = micros();
 
   adsSendCommand(CMD_SDATAC);
   delayMicroseconds(10);
 
   digitalWrite(PIN_EEG_START, HIGH);
-  adsSendCommand(CMD_START);
   delayMicroseconds(10);
   adsSendCommand(CMD_RDATAC);
   delayMicroseconds(10);
@@ -308,27 +465,26 @@ void adsStartStreaming() {
   digitalWrite(PIN_LED_STREAM, HIGH);
 
   if (g_outputMode == MODE_CSV) {
-    Serial.println("sample,drdy_t_us,proc_t_us,drdy_interval_us,status,ch1,ch2,ch3,ch4,ch1_uv,ch2_uv,ch3_uv,ch4_uv,flags,missed_drdy_frame,missed_drdy_total,recoveries_total");
-    Serial.println("# STREAM_ON");
-    Serial.println("# WARN CSV_DEBUG_ONLY");
+    printLine("sample,drdy_t_us,proc_t_us,drdy_interval_us,status,ch1,ch2,ch3,ch4,ch1_uv,ch2_uv,ch3_uv,ch4_uv,flags,missed_drdy_frame,missed_drdy_total,recoveries_total");
+    printLine("# STREAM_ON");
+    printLine("# WARN CSV_DEBUG_ONLY throttled when USB backs up");
   } else {
-    emitEventPacket(0x01, 1, 0, 0);
+    emitEventPacket(EVT_STREAM_STATE, 1, g_sessionId, g_sampleRateSps);
   }
 }
 
 void adsStopStreaming() {
   adsSendCommand(CMD_SDATAC);
   delayMicroseconds(10);
-  adsSendCommand(CMD_STOP);
   digitalWrite(PIN_EEG_START, LOW);
 
   g_streaming = false;
   digitalWrite(PIN_LED_STREAM, LOW);
 
   if (g_outputMode == MODE_CSV) {
-    Serial.println("# STREAM_OFF");
+    printLine("# STREAM_OFF");
   } else {
-    emitEventPacket(0x01, 0, 0, 0);
+    emitEventPacket(EVT_STREAM_STATE, 0, g_sessionId, g_sampleIndex);
   }
 }
 
@@ -355,9 +511,9 @@ bool handleOneSampleFrame() {
 
   if (!adsReadDataFrame15(g_rawFrame)) {
     if (g_outputMode == MODE_BIN) {
-      emitErrorPacket(0xE2, 0, 0);
+      emitErrorPacket(ERR_FRAME_READ_FAIL, 0, 0);
     } else {
-      Serial.println("# ERR FRAME_READ_FAIL");
+      printLine("# ERR FRAME_READ_FAIL");
     }
     return false;
   }
@@ -376,6 +532,7 @@ bool handleOneSampleFrame() {
   if (g_pendingBtnFlag) flags |= FLAG_BTN_TOGGLED;
   if (snap.missedDrdyFrame > 0) flags |= FLAG_DRDY_MISSED;
   if (g_pendingTxOverflowFlag) flags |= FLAG_TX_OVERFLOW;
+  if (g_pendingConfigFlag) flags |= FLAG_CONFIG_CHANGED;
 
   bool headerOk = statusHeaderValid(status24);
   uint8_t loffP = static_cast<uint8_t>(statusLeadOffP(status24));
@@ -406,15 +563,24 @@ bool handleOneSampleFrame() {
     emitted = emitSamplePacket(sampleTimestampUs, status24, ch1, ch2, ch3, ch4, flags,
                                snap.missedDrdyFrame, g_recoveriesTotal);
   } else {
-    emitCsvFrame(sampleTimestampUs, procUs, snap.drdyIntervalUs, status24,
-                 ch1, ch2, ch3, ch4,
-                 adsCountsToMicrovolts(ch1), adsCountsToMicrovolts(ch2),
-                 adsCountsToMicrovolts(ch3), adsCountsToMicrovolts(ch4),
-                 flags, snap.missedDrdyFrame, snap.missedDrdyTotal, g_recoveriesTotal);
+    // Throttle CSV instead of stalling acquisition when USB backs up.
+    if (txAboveHighWater()) {
+      g_txBytesDroppedTotal += 1;
+      g_txPacketsDroppedTotal++;
+      g_pendingTxOverflowFlag = true;
+      emitted = false;
+    } else {
+      emitCsvFrame(sampleTimestampUs, procUs, snap.drdyIntervalUs, status24,
+                   ch1, ch2, ch3, ch4,
+                   adsCountsToMicrovolts(ch1), adsCountsToMicrovolts(ch2),
+                   adsCountsToMicrovolts(ch3), adsCountsToMicrovolts(ch4),
+                   flags, snap.missedDrdyFrame, snap.missedDrdyTotal, g_recoveriesTotal);
+    }
   }
 
   g_pendingRecoveredFlag = false;
   g_pendingBtnFlag = false;
+  g_pendingConfigFlag = false;
   if (emitted) {
     g_pendingTxOverflowFlag = false;
   }
@@ -426,7 +592,7 @@ void recoverAdsIfNeeded() {
     return;
   }
 
-  uint32_t periodUs = (g_sampleRateSps > 0) ? (1000000UL / g_sampleRateSps) : ADS_DRDY_PERIOD_US;
+  uint32_t periodUs = g_expectedPeriodUs ? g_expectedPeriodUs : ADS_DRDY_PERIOD_US;
   uint32_t timeoutUs = max(50000UL, periodUs * 8UL);
 
   uint32_t nowUs = micros();
@@ -438,16 +604,30 @@ void recoverAdsIfNeeded() {
   adsStopStreaming();
 
   if (g_outputMode == MODE_BIN) {
-    emitErrorPacket(0xE3, nowUs, g_recoveriesTotal);
+    emitErrorPacket(ERR_DRDY_TIMEOUT, nowUs, g_recoveriesTotal);
   } else {
-    Serial.println("# WARN DRDY_TIMEOUT_RECOVER");
+    printLine("# WARN DRDY_TIMEOUT_RECOVER");
   }
 
   if (adsInitRobust()) {
     g_recoveriesTotal++;
     g_pendingRecoveredFlag = true;
     if (wasStreaming) {
-      adsStartStreaming();
+      // Restart acquisition without resetting sample_index so the host
+      // sees one continuous timeline with a recoveries_total bump.
+      resetStreamEdgeStats();
+      g_lastGoodFrameUs = micros();
+      adsSendCommand(CMD_SDATAC);
+      delayMicroseconds(10);
+      digitalWrite(PIN_EEG_START, HIGH);
+      delayMicroseconds(10);
+      adsSendCommand(CMD_RDATAC);
+      delayMicroseconds(10);
+      g_streaming = true;
+      digitalWrite(PIN_LED_STREAM, HIGH);
+      if (g_outputMode == MODE_BIN) {
+        emitEventPacket(EVT_STREAM_STATE, 1, g_sessionId, g_sampleRateSps);
+      }
     }
   }
 }
@@ -455,6 +635,9 @@ void recoverAdsIfNeeded() {
 bool adsRunInternalSelfTest(uint8_t frames) {
   if (frames == 0) {
     frames = 32;
+  }
+  if (frames > 120) {
+    frames = 120;
   }
 
   bool wasStreaming = g_streaming;
@@ -483,7 +666,6 @@ bool adsRunInternalSelfTest(uint8_t frames) {
   adsSendCommand(CMD_SDATAC);
   delayMicroseconds(10);
   digitalWrite(PIN_EEG_START, HIGH);
-  adsSendCommand(CMD_START);
   delayMicroseconds(10);
   adsSendCommand(CMD_RDATAC);
   delayMicroseconds(10);
@@ -526,34 +708,36 @@ bool adsRunInternalSelfTest(uint8_t frames) {
 
   adsSendCommand(CMD_SDATAC);
   delayMicroseconds(10);
-  adsSendCommand(CMD_STOP);
   digitalWrite(PIN_EEG_START, LOW);
 
-  bool dynamicOk = true;
-  for (uint8_t ch = 0; ch < 4; ch++) {
-    if (goodFrames == 0) {
-      dynamicOk = false;
-      break;
-    }
+  // The internal square wave should swing well above the noise floor on
+  // every channel. 50 counts was the old smoke test; require a clearly
+  // visible swing plus clean status headers instead.
+  bool dynamicOk = (goodFrames == frames);
+  int32_t minP2P = INT32_MAX;
+  for (uint8_t ch = 0; ch < 4 && dynamicOk; ch++) {
     int32_t p2p = maxCh[ch] - minCh[ch];
-    if (p2p < 50) {
+    if (p2p < minP2P) {
+      minP2P = p2p;
+    }
+    if (p2p < 2000) {
       dynamicOk = false;
-      break;
     }
   }
 
-  bool statusOk = (goodFrames == frames) && (statusBad <= (frames / 4));
+  bool statusOk = (goodFrames == frames) && (statusBad == 0);
   bool overallOk = dynamicOk && statusOk;
 
   if (g_outputMode == MODE_BIN) {
-    emitEventPacket(0x30, overallOk ? 1U : 0U, goodFrames, statusBad);
+    emitEventPacket(EVT_SELFTEST, overallOk ? 1U : 0U, goodFrames, statusBad);
+    emitEventPacket(EVT_CONFIG, static_cast<uint32_t>(minP2P < 0 ? 0 : minP2P),
+                    g_adsGain, g_sampleRateSps);
   } else {
-    Serial.print("# SELFTEST good_frames=");
-    Serial.print(goodFrames);
-    Serial.print(" status_bad=");
-    Serial.print(statusBad);
-    Serial.print(" result=");
-    Serial.println(overallOk ? "PASS" : "FAIL");
+    char buf[128];
+    snprintf(buf, sizeof(buf), "# SELFTEST good=%u bad=%u min_p2p=%ld result=%s",
+             goodFrames, statusBad, static_cast<long>(minP2P),
+             overallOk ? "PASS" : "FAIL");
+    printLine(buf);
   }
 
   if (oldTest != g_internalTestSignalEnabled) {
