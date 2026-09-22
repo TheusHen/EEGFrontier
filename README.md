@@ -1,5 +1,9 @@
 # EEGFrontier V2
 
+> [!CAUTION]
+> **THIS BRANCH IS OUTDATED – DO NOT FABRICATE THIS BOARD!**
+> The design files in this `v2` branch are outdated and contain known hardware issues. A new version is currently under active development. **Under no circumstances should you manufacture or order PCBs from this branch.** Please wait for the official update and release.
+
 EEGFrontier is an open-source EEG acquisition platform built around Texas Instruments ADS1299 and the Seeed XIAO RP2040.
 
 This repository includes:
