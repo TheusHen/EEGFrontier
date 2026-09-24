@@ -199,7 +199,8 @@ void emitHelloPacket() {
   // a = (fw_major << 24) | (fw_minor << 16) | PROTO_VER
   // b = (session_id low 16 << 16) | sps
   // c = (gain << 24) | (vref_mv & 0xFFFFFF)
-  uint32_t a = (2UL << 24) | (0UL << 16) | PROTO_VER;
+  uint32_t a = (static_cast<uint32_t>(FW_MAJOR) << 24) |
+               (static_cast<uint32_t>(FW_MINOR) << 16) | PROTO_VER;
   uint32_t b = (g_sampleRateSps & 0xFFFFUL);
   uint32_t vrefMv = g_adsVrefUv / 1000UL;
   uint32_t c = (static_cast<uint32_t>(g_adsGain) << 24) | (vrefMv & 0x00FFFFFFUL);

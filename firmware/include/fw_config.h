@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-// EEGFrontier V2 firmware (same V1 board: XIAO RP2040 + ADS1299-4).
+// EEGFrontier V2 isolated board: XIAO RP2040 + ADS1299-4PAGR.
 //
 // PINOUT (unchanged from V1):
 // D0  -> EEG_RESET
@@ -31,7 +31,7 @@
 //   LOFF ON | LOFF OFF | LOFF STATUS
 //   SPS 250 | 500 | 1000
 //   GAIN 1 | 2 | 4 | 6 | 8 | 12 | 24
-//   VREF 2400 | 4500
+//   VREF 4500 (fixed internal ADS1299 reference)
 //
 // BIN protocol (unchanged framing, see firmware/PROTOCOL_V2.md):
 //   packet = COBS(raw_packet) + 0x00
@@ -44,8 +44,10 @@
 
 // Firmware identity
 constexpr char FW_NAME[] = "EEGFrontier";
-constexpr char FW_VERSION[] = "2.0.0";
-constexpr uint16_t FW_VERSION_U16 = 0x0200;
+constexpr char FW_VERSION[] = "2.1.0";
+constexpr uint8_t FW_MAJOR = 2;
+constexpr uint8_t FW_MINOR = 1;
+constexpr uint16_t FW_VERSION_U16 = 0x0201;
 
 // Pins
 constexpr uint8_t PIN_EEG_RESET  = D0;
@@ -71,16 +73,10 @@ constexpr uint32_t SPI_CLOCK_HZ = 2000000;
 #define CSV_DEBUG_ENABLED 1  // CSV stays available but is throttled, debug only
 #endif
 
-// ADS1299 scaling / timing defaults.
-//
-// The V1 board routes AVDD from the 3.3 V rail, so the 4.5 V internal
-// reference is out of spec (it wants ~5 V AVDD). The driver still boots
-// with the legacy 4.5 V setting for backward compatibility with existing
-// captures, but VREF 2400 is the recommended operating point on this
-// board and can be selected at runtime. Host uV conversion must use the
-// matching VREF (see HELLO event / INFO ads_vref_uv).
+// ADS1299-4PAGR uses the internal 4.5 V reference on this V2 board.
+// AVDD is 5V_A (isolated); DVDD is 3V3_D_ISO. The ADS1299 internal
+// reference is fixed at 4.5 V: it is not programmable to 2.4 V.
 constexpr uint32_t ADS_VREF_UV_4500 = 4500000UL;
-constexpr uint32_t ADS_VREF_UV_2400 = 2400000UL;
 constexpr uint32_t ADS_VREF_UV = ADS_VREF_UV_4500;
 constexpr uint8_t ADS_DEFAULT_GAIN = 24;
 constexpr uint32_t ADS_DEFAULT_SPS = 250;

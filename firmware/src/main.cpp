@@ -58,15 +58,16 @@ void setup() {
   printLine("");
   printLine("# BOOT EEGFrontier_V2");
   printLine("# DEFAULT MODE BIN");
-  printLine("# WARN no medical isolation: battery laptop or USB isolator only");
+  printLine("# hardware_isolation=USB_to_EEG_SPI_and_power");
+  printLine("# WARN research hardware; isolation is not IEC 60601-1 certified");
   printHelp();
 
-  bool ok = adsInitRobust();
-  g_lastGoodFrameUs = micros();
   if (g_watchdogRebootDetected) {
     emitEventPacket(EVT_HELLO, 0x5242544CUL /*RBOT*/, g_recoveriesTotal, 0);
   }
   emitHelloPacket();
+  bool ok = adsInitRobust();
+  g_lastGoodFrameUs = micros();
   if (!ok) {
     blinkCode(2);
   }

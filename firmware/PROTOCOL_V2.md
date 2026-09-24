@@ -1,4 +1,4 @@
-# EEGFrontier Firmware V2 Protocol (same V1 board)
+# EEGFrontier Firmware V2 Protocol (V2 isolated board)
 
 Framing is unchanged from V1 so existing Pendulum builds keep working.
 V2 only adds event/error codes and documents the current defaults.
@@ -45,11 +45,12 @@ V2 adds bit 7 CONFIG_CHANGED (SPS/GAIN/VREF changed since last frame).
 | 0x31 | CONFIG | sps | gain | vref_mv (or min_p2p in selftest follow-up) |
 | 0x32 | TX_HIGH_WATER | queued | dropped_packets | 0 |
 
-HELLO packing: `a = (2<<24)|(0<<16)|PROTO_VER`,
+HELLO packing: `a = (2<<24)|(1<<16)|PROTO_VER`,
 `b = sps`, `c = (gain<<24)|(vref_mv & 0xFFFFFF)`.
 
-On boot the device emits `# BOOT` text, `HELLO`, then `ADS_INIT_OK`.
-After a watchdog reboot it also emits `HELLO` with `a = 'RBOT'`.
+On boot the device emits `# BOOT` text, `HELLO`, then `ADS_INIT_OK` (or
+`ADS_INIT_FAIL`). After a watchdog reboot it first emits an additional
+`HELLO` event with `a = 'RBOT'`.
 
 ## Errors
 
@@ -69,7 +70,7 @@ corrupting RDATAC. `STATS` never touches SPI and is always safe.
 ```
 HELP  INFO  STATS  REGS  START  STOP  MODE BIN  MODE CSV
 REINIT  TEST ON|OFF  SELFTEST  LOFF ON|OFF|STATUS
-SPS 250|500|1000  GAIN 1|2|4|6|8|12|24  VREF 2400|4500
+SPS 250|500|1000  GAIN 1|2|4|6|8|12|24  VREF 4500
 PING [seq]
 ```
 
@@ -77,12 +78,15 @@ PING [seq]
 high-water mark, frames are dropped and counted rather than stalling
 acquisition.
 
-## Defaults on the V1 board
+## Defaults on the V2 board
 
-- SPS 250, GAIN 24, VREF 4500 (legacy default for capture compat).
-- VREF 2400 is the recommended operating point because AVDD is 3.3 V;
-  select with `VREF 2400` and use the same value for host uV conversion:
-  `uV = counts * vref_uv / (gain * 8388607)`.
+- SPS 250, GAIN 24, internal VREF 4500.
+- The ADS1299-4 internal reference is fixed at 4.5 V. `VREF 2400` is
+  rejected; the host must use `ads_vref_uv=4500000` (HELLO/INFO) for
+  conversion: `uV = counts * vref_uv / (gain * 8388607)`.
+- AVDD/AVSS are 5V_A/GND_A from the isolated supply; DVDD is 3V3_D_ISO.
+- SPI/control and both supply rails cross the USB-to-EEG isolation barrier.
+  This research board is not IEC 60601-1 certified.
 - SPI 2 MHz, TX ring 16 KB, watchdog 2 s.
 - Button: short press toggles stream, 1.5 s hold runs SELFTEST.
 
@@ -90,9 +94,13 @@ acquisition.
 
 - CONFIG1: 0x96=250, 0x95=500, 0x94=1000 (HR mode).
 - CONFIG2: 0xD0 normal, 0xD3 test-signal.
-- CONFIG3: 0xEC vref 4.5 V, 0xCC vref 2.4 V. Both enable bias buffer.
+- CONFIG3: 0xEC enables the internal reference buffer, internal BIASREF,
+  and BIAS amplifier; reserved bits [6:5] are written as required by TI.
 - LOFF 0x13 with SENSP/SENSN 0x0F when diagnostics on, else 0x00.
 - CHnSET: gain bits in [6:4] (24x=0x60), MUX normal 0x00 / test 0x05.
 - BIAS_SENSP/SENSN 0x0F, GPIO 0x0C, MISC1/2 0x00, CONFIG4 0x00.
 - ID reset value 0x1E (0x12 seen on some lots); anything else logs a
   warning event but does not block init unless 0x00/0xFF.
+- Allow 150 ms for the internal reference to settle after CONFIG3 enables it.
+- The fitted ADS1299-4 has four measurement channels; firmware configures
+  and validates CH1SET–CH4SET and lead-off diagnostics only for those channels.
