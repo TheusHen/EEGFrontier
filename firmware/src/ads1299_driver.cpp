@@ -24,8 +24,9 @@ constexpr uint8_t ADS_CONFIG1_1000 = 0x94;
 
 constexpr uint8_t ADS_CONFIG2_NORMAL = 0xD0;
 constexpr uint8_t ADS_CONFIG2_TEST = 0xD3;
-constexpr uint8_t ADS_CONFIG3_VREF_4500 = 0xEC;
-constexpr uint8_t ADS_CONFIG3_VREF_2400 = 0xCC;
+// PD_REFBUF=1 (enable internal reference buffer), reserved bits [6:5]=11,
+// BIASREF_INT=1, PD_BIAS=1 (enable bias amplifier).
+constexpr uint8_t ADS_CONFIG3_INTERNAL_REF_BIAS = 0xEC;
 constexpr uint8_t ADS_LOFF_DIAG_CFG = 0x13;
 constexpr uint8_t ADS_LOFF_ALL_4CH_MASK = 0x0F;
 
@@ -68,7 +69,7 @@ uint8_t adsConfig2Value() {
 }
 
 uint8_t adsConfig3Value() {
-  return (g_adsVrefUv <= 3000000UL) ? ADS_CONFIG3_VREF_2400 : ADS_CONFIG3_VREF_4500;
+  return ADS_CONFIG3_INTERNAL_REF_BIAS;
 }
 
 uint32_t statusLeadOffP(uint32_t status24) {
@@ -251,6 +252,9 @@ bool adsConfigureRegisters() {
   adsWriteRegister(REG_CONFIG1, config1);
   adsWriteRegister(REG_CONFIG2, adsConfig2Value());
   adsWriteRegister(REG_CONFIG3, adsConfig3Value());
+  // TI specifies 150 ms internal-reference startup. Keep START low until
+  // the reference has settled, including after a hardware reset/reinit.
+  delay(150);
   adsWriteRegister(REG_LOFF, g_leadOffDiagEnabled ? ADS_LOFF_DIAG_CFG : 0x00);
 
   if (!writeChannelMuxAll(adsChannelConfigValue())) {
@@ -422,23 +426,9 @@ bool adsSetGain(uint8_t gain) {
 }
 
 bool adsSetVrefUv(uint32_t vrefUv) {
-  uint32_t target;
-  if (vrefUv <= 3000000UL) {
-    target = ADS_VREF_UV_2400;
-  } else {
-    target = ADS_VREF_UV_4500;
-  }
-  if (target == g_adsVrefUv) {
-    return true;
-  }
-  uint32_t old = g_adsVrefUv;
-  g_adsVrefUv = target;
-  if (!reconfigureKeepingStream(nullptr)) {
-    g_adsVrefUv = old;
-    (void)adsConfigureRegisters();
-    return false;
-  }
-  return true;
+  // The ADS1299's internal reference is fixed at 4.5 V. Do not accept a
+  // host scale that cannot be selected on this board's populated circuit.
+  return vrefUv == ADS_VREF_UV_4500;
 }
 
 void adsStartStreaming() {

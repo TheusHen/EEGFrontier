@@ -148,7 +148,7 @@ void printHelp() {
   printLine("  LOFF ON | LOFF OFF | LOFF STATUS");
   printLine("  SPS 250 | 500 | 1000");
   printLine("  GAIN 1|2|4|6|8|12|24");
-  printLine("  VREF 2400 | 4500");
+  printLine("  VREF 4500 (fixed internal reference)");
   printLine("  PING [seq]");
   printLine("");
 }
@@ -237,10 +237,8 @@ void printInfo() {
   } else {
     printLine("# ads_id=busy (STOP to read registers)");
   }
-  if (g_adsVrefUv == ADS_VREF_UV_4500) {
-    printLine("# NOTE VREF 4500 on 3V3 AVDD is out of spec; VREF 2400 recommended");
-  }
-  printLine("# WARN no medical isolation: battery laptop or USB isolator only");
+  printLine("# hardware_isolation=USB_to_EEG_SPI_and_power");
+  printLine("# WARN research hardware; isolation is not IEC 60601-1 certified");
   (void)restore;
 }
 
@@ -514,13 +512,13 @@ void processCommand(char* cmd) {
   if (std::strncmp(cmd, "VREF", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\t')) {
     bool ok = false;
     uint32_t v = parseU32Arg(cmd + 5, &ok);
-    // Accept millivolts (2400/4500) or microvolts (2400000/4500000).
+    // Accept millivolts (4500) or microvolts (4500000).
     uint32_t asUv = v;
     if (ok && v <= 10000UL) {
       asUv = v * 1000UL;
     }
     if (!ok || !adsSetVrefUv(asUv)) {
-      printLine("# ERR VREF use 2400|4500");
+      printLine("# ERR VREF fixed at 4500 mV by ADS1299 internal reference");
     } else {
       char buf[48];
       snprintf(buf, sizeof(buf), "# OK VREF %lu",
